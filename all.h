@@ -28,14 +28,17 @@
 
 #define LENGTH(x) (sizeof(x) / sizeof(x[0]))
 
+#define MIN(a, b) (a) > (b) ? (b) : (a)
+#define MAX(a, b) (a) > (b) ? (a) : (b)
+
 struct block {
-  int w, h;
-  char *str;
+    int w, h;
+    char *str;
 };
 
 struct {
-  int w, h, size;
-  char *str;
+    int w, h, size;
+    char *str;
 } bar, delim;
 
 typedef void (*interval_func)(void *, char *);

@@ -48,14 +48,31 @@ int string_to_glyphs_width(const char *string, int size) {
     return e.xOff;
 }
 
-int process(long timestamp) {
+struct timespec timespecsub(struct timespec end, struct timespec start) {
+    struct timespec result;
+
+    // Check if we need to borrow from seconds
+    int borrow = (end.tv_nsec < start.tv_nsec);
+
+    result.tv_sec = end.tv_sec - start.tv_sec - borrow;
+    result.tv_nsec = end.tv_nsec - start.tv_nsec + (borrow * 1000000000L);
+
+    return result;
+}
+
+int process(struct timespec now, struct timespec *last_exec, struct timespec *wakeup) {
+
     int i = 0, off = 0, width = 0, dirty = 0;
+    time_t sec;
     for (off = 0, i = 0; i < NUMBLOCKS; i++) {
         blocks[i].str = bar.str + off;
-        if ((timestamp & (interval[i] - 1)) == 0 && interval_clbk[i]) {
+        if (timespecsub(now, last_exec[i]).tv_sec >= interval[i] &&
+                interval_clbk[i]) {
             interval_clbk[i](user_ptr[i], blocks[i].str);
+            last_exec[i] = now;
             dirty = 1;
         }
+
         blocks[i].w = string_to_glyphs_width(blocks[i].str, block_size[i]);
         width += blocks[i].w;
         off += block_size[i];
@@ -75,16 +92,13 @@ void sighandler(int sig) {
 }
 
 int main() {
-    int timestamp = 0, fd, n, i, btn, maxsize = 0;
+    int fd, n, i, btn, maxsize = 0;
     XEvent xev;
     struct input_event evt;
     char dev[128];
-    struct timespec ts;
-    int clock_type = CLOCK_MONOTONIC_RAW;
-    clock_gettime(clock_type, &ts);
-    long tic, toc, delta = 0, prevdelta;
-    int oneshot = 1;
-    int mininterval = INT_MAX;
+    struct timespec now, wakeup;
+    int clock_type = CLOCK_REALTIME;
+    int mininterval = INT_MAX, maxinterval = 0;
 
     signal(SIGINT, sighandler);
     signal(SIGTERM, sighandler);
@@ -103,46 +117,46 @@ int main() {
     delim.size = strlen(delim.str);
     delim.w = string_to_glyphs_width(delim.str, delim.size);
 
+    clock_gettime(clock_type, &now);
+    struct timespec last_exec[NUMBLOCKS];
     i = NUMBLOCKS;
     while (i--) {
         if (init_clbk[i])
             user_ptr[i] = init_clbk[i]();
         maxsize += block_size[i];
-        if (interval[i] > 0 && mininterval > interval[i])
-            mininterval = interval[i];
+        if (interval[i] > 0) {
+            mininterval = MIN(interval[i], mininterval);
+            maxinterval = MAX(interval[i], maxinterval);
+        }
+
+        last_exec[i].tv_sec = now.tv_sec - 100000;
+        last_exec[i].tv_nsec = 0;
     }
+
     bar.size = NUMBLOCKS * (maxsize + 1);
     bar.str = malloc(bar.size);
     memset(bar.str, ' ', bar.size);
 
-    fd = open(dev, O_RDONLY | O_NONBLOCK);
-    clock_gettime(clock_type, &ts);
-    tic = ts.tv_sec;
-    process(0);
+    wakeup.tv_sec = 0;
+    wakeup.tv_nsec = 100000000;
 
     while (running) {
-        usleep(mininterval * 1e5);
-        prevdelta = delta;
-        clock_gettime(clock_type, &ts);
-        toc = ts.tv_sec;
-        delta = toc - tic;
-        if (delta != prevdelta) {
-            if (oneshot == 1 && process(delta)) {
-                XStoreName(dpy.d, win, bar.str);
-                XFlush(dpy.d);
-            }
-            oneshot = 0;
-        } else {
-            oneshot = 1;
+        if (process(now, last_exec, &wakeup)) {
+            XStoreName(dpy.d, win, bar.str);
+            XFlush(dpy.d);
         }
+
+        clock_nanosleep(clock_type, TIMER_ABSTIME, &wakeup, NULL);
+        clock_gettime(clock_type, &now);
     }
+
+
 
     i = NUMBLOCKS;
     while (i--) {
         if (close_clbk[i])
             close_clbk[i](user_ptr[i]);
     }
-    close(fd);
     XftFontClose(dpy.d, font);
     XFlush(dpy.d);
     XCloseDisplay(dpy.d);

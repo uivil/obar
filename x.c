@@ -63,7 +63,12 @@ struct timespec timespecsub(struct timespec end, struct timespec start) {
 int process(struct timespec now, struct timespec *last_exec, struct timespec *wakeup) {
 
     int i = 0, off = 0, width = 0, dirty = 0;
-    time_t sec;
+    struct timespec next;
+
+    wakeup->tv_sec = now.tv_sec + 7200;
+    wakeup->tv_nsec = now.tv_nsec;
+
+
     for (off = 0, i = 0; i < NUMBLOCKS; i++) {
         blocks[i].str = bar.str + off;
         if (timespecsub(now, last_exec[i]).tv_sec >= interval[i] &&
@@ -73,6 +78,12 @@ int process(struct timespec now, struct timespec *last_exec, struct timespec *wa
             dirty = 1;
         }
 
+        next.tv_sec = last_exec[i].tv_sec + interval[i];
+        next.tv_nsec = last_exec[i].tv_nsec;
+
+        if (next.tv_sec < wakeup->tv_sec || (next.tv_sec == wakeup->tv_sec && next.tv_nsec < wakeup->tv_nsec))
+            *wakeup = next;
+
         blocks[i].w = string_to_glyphs_width(blocks[i].str, block_size[i]);
         width += blocks[i].w;
         off += block_size[i];
@@ -81,6 +92,7 @@ int process(struct timespec now, struct timespec *last_exec, struct timespec *wa
         memcpy(bar.str + off, delim.str, delim.size);
         off += delim.size;
     }
+
     bar.str[off] = '\0';
     bar.size = off;
     bar.w = width + delim.w * (NUMBLOCKS - 1);
@@ -137,15 +149,11 @@ int main() {
     bar.str = malloc(bar.size);
     memset(bar.str, ' ', bar.size);
 
-    wakeup.tv_sec = 0;
-    wakeup.tv_nsec = 100000000;
-
     while (running) {
         if (process(now, last_exec, &wakeup)) {
             XStoreName(dpy.d, win, bar.str);
             XFlush(dpy.d);
         }
-
         clock_nanosleep(clock_type, TIMER_ABSTIME, &wakeup, NULL);
         clock_gettime(clock_type, &now);
     }
